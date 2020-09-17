@@ -46,13 +46,13 @@ from nncf.quantization.hw_precision_constraints import HWPrecisionConstraints
 from nncf.quantization.init_precision import PrecisionInitializerFactory
 from nncf.quantization.layers import QUANTIZATION_MODULES, QuantizationMode, QuantizerConfig, BaseQuantizer, \
     QuantizerExportMode, QuantizersSwitcher
-from nncf.quantization.metrics import NetworkQuantizationShareMetric, MemoryСostMetric, ShareEdgesQuantizedDataPath
+from nncf.quantization.metrics import NetworkQuantizationShareMetric, MemoryCostMetric, ShareEdgesQuantizedDataPath
 from nncf.quantization.quantizer_id import WeightQuantizerId, NonWeightQuantizerId, InputQuantizerId, \
     FunctionQuantizerId
 from nncf.quantization.quantizer_propagation import QuantizerPropagationSolver, QuantizerPropagationStateGraph
 from nncf.quantization.schedulers import QUANTIZATION_SCHEDULERS
 from nncf.structures import QuantizationPrecisionInitArgs, QuantizationRangeInitArgs
-from nncf.utils import get_all_modules_by_type, in_scope_list, is_main_process
+from nncf.utils import get_all_modules_by_type, in_scope_list, is_main_process, should_consider_scope
 from nncf.utils import get_state_dict_names_with_modules
 
 
@@ -829,7 +829,7 @@ class QuantizationController(QuantizationControllerBase):
             self.non_stable_metric_collectors = [NetworkQuantizationShareMetric(target_model, self.weight_quantizers, \
                                                                                 self.non_weight_quantizers,
                                                                                 quantizer_setup_type),
-                                                 MemoryСostMetric(target_model, self.weight_quantizers,
+                                                 MemoryCostMetric(target_model, self.weight_quantizers,
                                                                   self.non_weight_quantizers)]
             # These metrics are collected once here and are not updated when the method .statistics() is called
             self.stable_metric_collectors = [ShareEdgesQuantizedDataPath(target_model)]
@@ -861,14 +861,15 @@ class QuantizationController(QuantizationControllerBase):
             quantization_type = class_type.__name__
             module_dict = get_all_modules_by_type(self._model, quantization_type)
             for scope, module in module_dict.items():
+                quantizer_group = "weights" if module.is_weights else "activations"
                 module_init_range_config = self._get_local_init_range_config(scope, scope_overrides,
-                                                                             global_init_range_config)
+                                                                             global_init_range_config, quantizer_group)
                 modules_to_init[str(scope)] = (module, module_init_range_config)
 
         # NOTE: Order of modules must be the same to correctly broadcast parameters (e.g. input_low
         # and input_range)
         modules_to_init = OrderedDict(sorted(modules_to_init.items()))
-
+        self.modules_to_range_init = modules_to_init
         runner = DataLoaderRangeInitializeRunner(self._model, modules_to_init, device)
 
         quantizers = [module for module, config in modules_to_init.values()]
@@ -916,9 +917,7 @@ class QuantizationController(QuantizationControllerBase):
                         'Refer to `NNCFConfig.register_extra_structs` and the `QuantizationPrecisionInitArgs` class')
 
             init_impl = PrecisionInitializerFactory.create(precision_init_type)
-            initializer = init_impl(self, init_precision_config, self.all_quantizations,
-                                    self._hw_precision_constraints,
-                                    precision_init_args)
+            initializer = init_impl(self, init_precision_config, precision_init_args)
             initializer.apply_init()
 
     def init_range(self):
@@ -947,27 +946,42 @@ class QuantizationController(QuantizationControllerBase):
                 num_init_steps = 0
 
             init_range_config = {'num_init_steps': num_init_steps}
-        if init_range_config:
-            global_init_range_config = dict()
-            global_init_range_config.update(init_range_config)
-            if global_init_range_config.get("type") is None:
-                global_init_range_config["type"] = "mean_min_max"
+        if isinstance(init_range_config, dict):
+            global_init_range_config = self.update_range_config_by_default(init_range_config)
+            max_num_init_steps = global_init_range_config['num_init_steps']
+        else:
+            max_num_init_steps = 0
+            global_init_range_config = []
+            for sub_init_range_config in init_range_config:
+                global_init_range_config.append(self.update_range_config_by_default(sub_init_range_config))
+                max_num_init_steps = max(sub_init_range_config['num_init_steps'], max_num_init_steps)
 
-            num_init_steps = global_init_range_config.get('num_init_steps', 1)
-            if num_init_steps < 0:
-                raise AttributeError('Number of initialization steps must be >= 0')
-            if num_init_steps > 0:
-                try:
-                    range_init_args = self.quantization_config.get_extra_struct(QuantizationRangeInitArgs)
-                except KeyError:
-                    raise ValueError(
-                        'Should run range initialization as specified via config,'
-                        'but the initializing data loader is not provided as an extra struct. '
-                        'Refer to `NNCFConfig.register_extra_structs` and the `QuantizationRangeInitArgs` class')
-                data_loader = range_init_args.data_loader
+        if max_num_init_steps > 0:
+            try:
+                range_init_args = self.quantization_config.get_extra_struct(QuantizationRangeInitArgs)
+            except KeyError:
+                raise ValueError(
+                    'Should run range initialization as specified via config,'
+                    'but the initializing data loader is not provided as an extra struct. '
+                    'Refer to `NNCFConfig.register_extra_structs` and the `QuantizationRangeInitArgs` class')
+            data_loader = range_init_args.data_loader
 
-                self._do_range_init(data_loader, num_init_steps, global_init_range_config,
-                                    range_init_args.device)
+            self._do_range_init(data_loader, max_num_init_steps, global_init_range_config,
+                                range_init_args.device)
+
+    def update_range_config_by_default(self, init_range_config: Dict):
+        global_init_range_config = dict()
+        global_init_range_config.update(init_range_config)
+        if global_init_range_config.get("type") is None:
+            global_init_range_config["type"] = "mean_min_max"
+
+        if global_init_range_config.get("num_init_steps") is None:
+            global_init_range_config["num_init_steps"] = 1
+
+        num_init_steps = global_init_range_config.get('num_init_steps', 1)
+        if num_init_steps < 0:
+            raise AttributeError('Number of initialization steps must be >= 0')
+        return global_init_range_config
 
     def get_weights_activation_quantizers_pairs(self) -> List[Tuple[List[BaseQuantizer], BaseQuantizer]]:
         """
@@ -1040,13 +1054,36 @@ class QuantizationController(QuantizationControllerBase):
         self._set_quantization_status(lambda x: x.is_weights, lambda x: x.disable_quantization())
 
     def _get_local_init_range_config(self, scope: Scope, scope_overrides: Dict[str, Dict],
-                                     global_init_range_config: Dict):
-        module_init_range_config = global_init_range_config
+                                     global_init_range_config: Dict, quantizer_group: str):
+        if isinstance(global_init_range_config, dict):
+            module_init_range_config = global_init_range_config
+        else:
+            module_init_range_config = None
+            matched_init_range_config = []
+            for range_init_subconfig in global_init_range_config:
+                target_scopes = range_init_subconfig.get("target_scopes", None)
+                ignored_scopes = range_init_subconfig.get("ignored_scopes", None)
+                target_quantizer_group = range_init_subconfig.get("target_quantizer_group", quantizer_group)
+                if quantizer_group == target_quantizer_group and\
+                    should_consider_scope(str(scope), target_scopes, ignored_scopes):
+                    matched_init_range_config.append(range_init_subconfig)
+
+            if len(matched_init_range_config) == 1:
+                module_init_range_config = matched_init_range_config[0]
+            else:
+                raise AssertionError("The range initialization configs conflict with each other. "
+                                     "Conflicting configs: {} for scope {}.".format(matched_init_range_config,
+                                                                                    str(scope)))
+
         for overridden_scope in scope_overrides.keys():
             if in_scope_list(str(scope), overridden_scope):
                 override_config = scope_overrides[overridden_scope].get('initializer', {}).get("range")
                 if override_config is not None:
                     module_init_range_config = override_config
+
+        if module_init_range_config is None:
+            module_init_range_config = self.update_range_config_by_default({})
+
         return module_init_range_config
 
     def statistics(self):

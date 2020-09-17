@@ -31,9 +31,6 @@ from nncf.pruning.utils import get_rounded_pruned_element_number
 
 @COMPRESSION_ALGORITHMS.register('filter_pruning')
 class FilterPruningBuilder(BasePruningAlgoBuilder):
-    def __init__(self, config, should_init: bool = True):
-        super().__init__(config, should_init)
-
     def create_weight_pruning_operation(self, module):
         return FilterPruningBlock(module.weight.size(0))
 
@@ -188,8 +185,7 @@ class FilterPruningController(BasePruningAlgoController):
         table.add_rows(data)
         return table
 
-    # pylint: disable=protected-access
-    def export_model(self, filename, *args, **kwargs):
+    def prepare_for_export(self):
         """
         This function discards the pruned filters based on the binary masks
         before exporting the model to ONNX.
@@ -197,6 +193,7 @@ class FilterPruningController(BasePruningAlgoController):
         self._apply_masks()
         model = self._model.eval().cpu()
         graph = model.get_original_graph()
+        # pylint: disable=protected-access
         nx_graph = graph._nx_graph
 
         parameters_count_before = model.get_parameters_count_in_model()
@@ -214,8 +211,6 @@ class FilterPruningController(BasePruningAlgoController):
         nncf_logger.info(stats.draw())
         nncf_logger.info('Final Model Pruning Rate = %.3f', 1 - parameters_count_after / parameters_count_before)
         nncf_logger.info('Total MAC pruning level = %.3f', 1 - flops_after / flops)
-
-        super().export_model(filename, *args, **kwargs)
 
     def compression_level(self) -> CompressionLevel:
         target_pruning_level = self.scheduler.pruning_target
