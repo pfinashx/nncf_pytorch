@@ -239,15 +239,23 @@ class TestMmdetection:
         subprocess.run("{}; git apply 0001-Modifications-for-NNCF-usage.patch".format(self.activate_venv),
                        check=True, shell=True, cwd=self.MMDET_PATH)
         subprocess.run(
-            "{}; pip install mmcv-full==1.1.4 -f https://download.openmmlab.com/mmcv/dist/index.html".format(
-                self.activate_venv), check=True, shell=True, cwd=self.MMDET_PATH)
+            "{}; pip install mmcv-full==1.1.4+torch1.5.0+cu102 "
+            "-f https://download.openmmlab.com/mmcv/dist/index.html".format(self.activate_venv), check=True, shell=True,
+            cwd=self.MMDET_PATH)
         subprocess.run("{}; pip install -r requirements/build.txt".format(self.activate_venv), check=True, shell=True,
                        cwd=self.MMDET_PATH)
         subprocess.run("{}; pip install -v -e .".format(self.activate_venv), check=True, shell=True,
                        cwd=self.MMDET_PATH)
         subprocess.run("{}; pip install -U \"git+https://github.com/open-mmlab/cocoapi.git#subdirectory=pycocotools\""
                        .format(self.activate_venv), check=True, shell=True, cwd=self.MMDET_PATH)
-        subprocess.run("{}; ln -s {} data".format(self.activate_venv, DATASET_PATH), check=True, shell=True,
+
+        subprocess.run("{}; mkdir {}".format(self.activate_venv, self.MMDET_PATH + "/data"), check=True, shell=True,
+                       cwd=self.MMDET_PATH)
+        subprocess.run("{}; ln -s {}/voc data/VOCdevkit".format(self.activate_venv, DATASET_PATH), check=True,
+                       shell=True,
+                       cwd=self.MMDET_PATH)
+        subprocess.run("{}; ln -s {}/coco data/coco".format(self.activate_venv, DATASET_PATH), check=True,
+                       shell=True,
                        cwd=self.MMDET_PATH)
 
     def test_ssd300_train(self):

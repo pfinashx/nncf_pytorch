@@ -477,7 +477,7 @@ def main_worker(current_gpu, config):
         criterion = get_criterion(w_class, config)
 
     if not resuming_checkpoint_path:
-        nncf_config = register_default_init_args(nncf_config, train_loader, criterion)
+        nncf_config = register_default_init_args(nncf_config, train_loader, criterion, config.device)
 
     model = load_model(config.model,
                        pretrained=pretrained,
@@ -528,15 +528,12 @@ def main(argv):
     if arguments.dist_url == "env://":
         config.update_from_env()
 
-    if config.mode.lower() != 'test':
-        if not osp.exists(config.log_dir):
-            os.makedirs(config.log_dir)
+    if not osp.exists(config.log_dir):
+        os.makedirs(config.log_dir)
 
-        config.log_dir = str(config.log_dir)
-        configure_paths(config)
-        logger.info("Save directory: {}".format(config.log_dir))
-    else:
-        config.log_dir = "/tmp/"
+    config.log_dir = str(config.log_dir)
+    configure_paths(config)
+    logger.info("Save directory: {}".format(config.log_dir))
 
     config.execution_mode = get_execution_mode(config)
     start_worker(main_worker, config)

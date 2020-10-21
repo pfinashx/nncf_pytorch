@@ -25,8 +25,8 @@ class RangeInitializerFactory:
         if init_type == "mean_min_max":
             return MeanMinMaxInitializer(module, num_init_steps, log_module_name)
         if init_type == "percentile":
-            min_percentile = init_config["min_percentile"]
-            max_percentile = init_config["max_percentile"]
+            min_percentile = init_config.get("min_percentile", 10)
+            max_percentile = init_config.get("max_percentile", 90)
             return PercentileInitializer(module, num_init_steps, min_percentile, max_percentile, log_module_name)
         raise NotImplementedError
 
@@ -216,13 +216,18 @@ class DataLoaderBNAdaptationRunner(DataLoaderBaseRunner):
         pass
 
 
-def register_default_init_args(nncf_config: 'NNCFConfig', train_loader, criterion=None) -> 'NNCFConfig':
+def register_default_init_args(nncf_config: 'NNCFConfig', train_loader, criterion=None, device='cuda') -> 'NNCFConfig':
     if criterion:
         nncf_config.register_extra_structs([QuantizationPrecisionInitArgs(criterion=criterion,
-                                                                          data_loader=train_loader),
-                                            QuantizationRangeInitArgs(data_loader=train_loader),
-                                            BNAdaptationInitArgs(data_loader=train_loader)])
+                                                                          data_loader=train_loader,
+                                                                          device=device),
+                                            QuantizationRangeInitArgs(data_loader=train_loader,
+                                                                      device=device),
+                                            BNAdaptationInitArgs(data_loader=train_loader,
+                                                                 device=device)])
     else:
-        nncf_config.register_extra_structs([QuantizationRangeInitArgs(data_loader=train_loader),
-                                            BNAdaptationInitArgs(data_loader=train_loader)])
+        nncf_config.register_extra_structs([QuantizationRangeInitArgs(data_loader=train_loader,
+                                                                      device=device),
+                                            BNAdaptationInitArgs(data_loader=train_loader,
+                                                                 device=device)])
     return nncf_config
