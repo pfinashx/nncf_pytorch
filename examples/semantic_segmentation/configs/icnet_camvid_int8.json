@@ -24,6 +24,7 @@
     },
 
     "weighing": "mfb",
+
     "optimizer": {
         "type": "adam",
         "optimizer_params": {
@@ -35,12 +36,13 @@
             "power": 0.9
         }
     },
+
     "model_params": {
          "in_channels": 3,
          "input_size_hw": [768, 960]
     },
+
     "compression": {
-            "algorithm": "quantization",
-            "ignored_scopes": ["ICNet/interpolate_0"]
+            "algorithm": "quantization"
     }
 }

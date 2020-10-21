@@ -2,8 +2,9 @@ import logging
 import sys
 
 logger = logging.getLogger("example")
+_LOGGER_INITIALIZED = False
 
-if not logger.hasHandlers():
+if not _LOGGER_INITIALIZED:
     logger.setLevel(logging.INFO)
     hdl = logging.StreamHandler(stream=sys.stdout)
     hdl.setFormatter(logging.Formatter("%(message)s"))

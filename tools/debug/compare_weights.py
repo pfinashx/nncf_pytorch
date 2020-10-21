@@ -13,7 +13,7 @@
 
 import argparse
 import json
-import defusedxml.cElementTree as ET
+import xml.etree.cElementTree as ET
 from collections import OrderedDict
 
 import os

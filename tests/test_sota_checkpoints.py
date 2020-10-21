@@ -87,9 +87,7 @@ class TestSotaCheckpoints:
 
         def process_line(decoded_line: str, error_lines: List):
             if re.search('Error|(No module named)', decoded_line):
-                # WA for tensorboardX multiprocessing bug (https://github.com/lanpa/tensorboardX/issues/598)
-                if not re.search('EOFError', decoded_line):
-                    error_lines.append(decoded_line)
+                error_lines.append(decoded_line)
             if decoded_line != "":
                 print(decoded_line)
 
@@ -112,7 +110,7 @@ class TestSotaCheckpoints:
     def make_table_row(test, expected_, metrics_type_, key, error_message, metric, diff_target, fp32_metric_=None,
                        diff_fp32=None):
         TestSotaCheckpoints.test = test
-        if metric is not None:
+        if metric != 0:
             if fp32_metric_ is None:
                 fp32_metric_ = "-"
                 diff_fp32 = "-"
@@ -152,7 +150,7 @@ class TestSotaCheckpoints:
         with tag('p'):
             with tag('span', style="Background-color: #{}".format(BG_COLOR_RED_HEX)):
                 text('Thresholds for FP32 and Expected are failed')
-        with tag('table', border="1", cellpadding="5", style="border-collapse: collapse; border: 1px solid;"):
+        with tag('table', border="1", cellpadding="5", style="border-collapse: collapse; border: 1px solid black;"):
             with tag('tr'):
                 for i in init_table_string:
                     with tag('td'):
@@ -290,8 +288,6 @@ class TestSotaCheckpoints:
         is_ok = (exit_code == 0 and err_str is None)
         if is_ok:
             metric_value = self.read_metric(str(metrics_dump_file_path))
-        else:
-            metric_value = None
 
         fp32_metric = None
         if eval_test_struct.reference_ is not None:
@@ -309,8 +305,7 @@ class TestSotaCheckpoints:
 
         self.row_dict[eval_test_struct.model_name_] = self.make_table_row(test, eval_test_struct.expected_,
                                                                           eval_test_struct.metric_type_,
-                                                                          eval_test_struct.model_name_,
-                                                                          err_str,
+                                                                          eval_test_struct.model_name_, err_str,
                                                                           metric_value,
                                                                           diff_target,
                                                                           fp32_metric,

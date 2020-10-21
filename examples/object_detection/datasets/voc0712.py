@@ -21,9 +21,9 @@ import torch
 import torch.utils.data as data
 
 if sys.version_info[0] == 2:
-    import defusedxml.cElementTree as ET
+    import xml.etree.cElementTree as ET
 else:
-    import defusedxml.ElementTree as ET
+    import xml.etree.ElementTree as ET
 
 VOC_CLASSES = (  # always index 0
     'aeroplane', 'bicycle', 'bird', 'boat',

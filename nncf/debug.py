@@ -17,7 +17,7 @@ from typing import List, Dict
 from torch.nn import Module
 from nncf.nncf_logger import logger as nncf_logger
 
-DEBUG_LOG_DIR = "./nncf_debug"
+DEBUG_LOG_DIR = "/tmp"
 
 
 def is_debug():
@@ -27,6 +27,7 @@ def is_debug():
 def set_debug_log_dir(dir_: str):
     global DEBUG_LOG_DIR
     DEBUG_LOG_DIR = dir_
+
 
 
 class CallCountTracker:

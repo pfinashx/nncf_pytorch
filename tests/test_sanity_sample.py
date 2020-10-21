@@ -400,6 +400,7 @@ def test_cpu_only_mode_produces_cpu_only_model(config, tmp_path, mocker):
     }
 
     command_line = " ".join(key if val is None else "{} {}".format(key, val) for key, val in args.items())
+
     if config["sample_type"] == "classification":
         import examples.classification.main as sample
         if is_staged_quantization(config['nncf_config']):

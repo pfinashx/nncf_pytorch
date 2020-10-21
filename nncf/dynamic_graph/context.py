@@ -309,7 +309,7 @@ class TracingContext:
         return self._thread_local.scopes
 
     def _init_thread_local(self):
-        # todo: primary node part!
+        # todo: master node part!
         tl = self._thread_local
         if getattr(tl, 'ready', False):
             return

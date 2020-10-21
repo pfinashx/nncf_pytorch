@@ -12,12 +12,10 @@
 """
 
 import os.path
-import torch
 from torch.utils.cpp_extension import load
 
-from nncf.extensions import CudaNotAvailableStub
 from nncf.utils import set_build_dir_for_venv
-from nncf.definitions import NNCF_PACKAGE_ROOT_DIR
+from nncf.definitions import get_install_type, NNCF_PACKAGE_ROOT_DIR
 
 set_build_dir_for_venv()
 
@@ -43,7 +41,7 @@ QuantizedFunctionsCPU = load(
     verbose=False
 )
 
-if torch.cuda.is_available():
+if get_install_type() == 'GPU':
     ext_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cuda")
     QuantizedFunctionsCUDA = load(
         'quantized_functions_cuda', CUDA_EXT_SRC_LIST,
@@ -51,4 +49,4 @@ if torch.cuda.is_available():
         verbose=False
     )
 else:
-    QuantizedFunctionsCUDA = CudaNotAvailableStub
+    QuantizedFunctionsCUDA = None

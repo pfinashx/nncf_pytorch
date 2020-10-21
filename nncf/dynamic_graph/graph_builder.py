@@ -78,10 +78,8 @@ class GraphBuilder:
         if context_to_use is None:
             context_to_use = TracingContext()
 
-        context_to_use.base_module_thread_local_replica = model
         with context_to_use as _ctx:
-            with torch.no_grad():
-                self.custom_forward_fn(model)
+            self.custom_forward_fn(model)
         model.load_state_dict(sd)
 
         if isinstance(model, PostGraphBuildActing):

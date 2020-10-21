@@ -65,8 +65,7 @@
             }
         },
         {
-            "algorithm": "quantization",
-            "ignored_scopes": ["ICNet/interpolate_0"]
+            "algorithm": "quantization"
     }
     ]
 }

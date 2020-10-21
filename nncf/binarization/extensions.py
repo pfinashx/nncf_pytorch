@@ -12,13 +12,10 @@
 """
 
 import os.path
-
-import torch
 from torch.utils.cpp_extension import load
 
-from nncf.extensions import CudaNotAvailableStub
 from nncf.utils import set_build_dir_for_venv
-from nncf.definitions import NNCF_PACKAGE_ROOT_DIR
+from nncf.definitions import get_install_type, NNCF_PACKAGE_ROOT_DIR
 
 set_build_dir_for_venv()
 
@@ -44,10 +41,8 @@ BinarizedFunctionsCPU = load(
     verbose=False
 )
 
-if torch.cuda.is_available():
+if get_install_type() == "GPU":
     BinarizedFunctionsCUDA = load(
         'binarized_functions_cuda', CUDA_EXT_SRC_LIST, extra_include_paths=EXT_INCLUDE_DIRS,
         verbose=False
     )
-else:
-    BinarizedFunctionsCUDA = CudaNotAvailableStub

@@ -43,7 +43,8 @@ class FilterPruningBuilder(BasePruningAlgoBuilder):
         # Currently prune only Convolutions
         return isinstance(module, tuple(NNCF_CONV_MODULES_DICT.keys()))
 
-    def get_types_of_pruned_modules(self):
+    @staticmethod
+    def get_types_of_pruned_modules():
         types = [str.lower(v.__name__) for v in NNCF_CONV_MODULES_DICT.values()]
         return types
 

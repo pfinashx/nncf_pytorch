@@ -1,19 +1,17 @@
 import itertools
 from collections import OrderedDict
 from pathlib import Path
-from typing import List, Dict, Union, Tuple, NamedTuple
+from typing import List, Dict, Union
 
 import os
 import torch
-import warnings
-
 from bisect import bisect_left
 from operator import itemgetter
 from torch import Tensor, nn
 from torch.nn.modules.loss import _Loss
 
 from nncf.debug import is_debug
-from nncf.dynamic_graph.context import no_nncf_trace, Scope
+from nncf.dynamic_graph.context import no_nncf_trace
 from nncf.nncf_logger import logger as nncf_logger
 from nncf.nncf_network import NNCFNetwork, CompressionModuleType
 from nncf.quantization.layers import QUANTIZATION_MODULES, QuantizersSwitcher, BaseQuantizer
@@ -146,62 +144,64 @@ class HAWQPrecisionInitializer(ManualPrecisionInitializer):
         self.flops_counter = CompressionRatioCalculator(self._model, self._quantizers_handler)
 
     def apply_init(self):
-        bits_configurations = None
-        if len(self._quantizers_handler.get_ordered_weight_quantizers_per_id()) != 0:
-            original_device = next(self._model.parameters()).device
-            self._model.to(self._init_device)
+        original_device = next(self._model.parameters()).device
+        self._model.to(self._init_device)
 
-            traces_per_layer = self._calc_traces(self._criterion, self._iter_number, self._tolerance)
-            if not traces_per_layer:
-                raise RuntimeError('Failed to calculate hessian traces!')
+        traces_per_layer = self._calc_traces(self._criterion, self._iter_number, self._tolerance)
+        if not traces_per_layer:
+            raise RuntimeError('Failed to calculate hessian traces!')
 
-            traces_order = traces_per_layer.get_order_of_traces()
-            num_weights = len(self._ordered_weight_quantizations)
-            bits_configurations = self.get_configs_constrained_by_order(self._bits, num_weights)
+        traces_order = traces_per_layer.get_order_of_traces()
+        num_weights = len(self._ordered_weight_quantizations)
+        bits_configurations = self.get_configs_constrained_by_order(self._bits, num_weights)
 
-            ordered_weight_quantization_ids = list(self._ordered_weight_quantizations.keys())
-            bits_configurations = self._filter_configs_by_precision_constraints(bits_configurations,
-                                                                                self._hw_precision_constraints,
-                                                                                ordered_weight_quantization_ids,
-                                                                                traces_order)
-        ordered_metric_per_layer = None
+        ordered_weight_quantization_ids = list(self._ordered_weight_quantizations.keys())
+        bits_configurations = self._filter_configs_by_precision_constraints(bits_configurations,
+                                                                            self._hw_precision_constraints,
+                                                                            ordered_weight_quantization_ids,
+                                                                            traces_order)
         if not bits_configurations:
-            warnings.warn('All bits configurations are incompatible with HW Config!', RuntimeWarning)
-        else:
-            perturbations, weight_observers = self.calc_quantization_noise()
+            raise RuntimeError('All bits configurations are incompatible with HW Config!')
 
-            configuration_metric = self.calc_hawq_metric_per_configuration(bits_configurations, perturbations,
-                                                                           traces_per_layer, self._init_device)
+        skipped_quantizers = self._quantizers_handler.get_skipped_weight_quantizers_per_id()
+        min_ratio, max_ratio = self.flops_counter.ratio_limits(self._bits, traces_order, self._hw_precision_constraints,
+                                                               skipped_quantizers)
+        if not min_ratio <= self._compression_ratio <= max_ratio:
+            raise AttributeError('Invalid compression ratio={}. Should be between within range [{:.2f}, {:.2f}]'.format(
+                self._compression_ratio, min_ratio, max_ratio))
 
-            flops_bits_per_config = self.get_flops_bits_per_config(bits_configurations, traces_order)
-            config_index = self.choose_configuration(configuration_metric, flops_bits_per_config)
-            chosen_config_per_layer = bits_configurations[config_index]
-            chosen_config_per_layer = self.get_ordered_config(chosen_config_per_layer, traces_order)
-            nncf_logger.info('Chosen HAWQ configuration with ratio={:.2f}, bitwidth per weightable layer={}'.format(
-                flops_bits_per_config[config_index], chosen_config_per_layer))
-            nncf_logger.debug('Order of the weightable layers in the HAWQ configuration={}'.format(traces_order))
+        perturbations, weight_observers = self.calc_quantization_noise()
 
-            self.set_chosen_config(chosen_config_per_layer)
+        configuration_metric = self.calc_hawq_metric_per_configuration(bits_configurations, perturbations,
+                                                                       traces_per_layer, self._init_device)
 
-            if is_debug():
-                hawq_debugger = HAWQDebugger(bits_configurations, perturbations,
-                                             weight_observers, traces_per_layer, self._bits)
-                hawq_debugger.dump_metric_MB(configuration_metric)
-                hawq_debugger.dump_metric_flops(configuration_metric, flops_bits_per_config, config_index)
-                hawq_debugger.dump_avg_traces()
-                hawq_debugger.dump_density_of_quantization_noise()
-                hawq_debugger.dump_perturbations_ratio()
-                hawq_debugger.dump_bitwidth_graph(self._algo, self._model)
+        flops_bits_per_config = self.get_flops_bits_per_config(bits_configurations, traces_order)
+        config_index = self.choose_configuration(configuration_metric, flops_bits_per_config)
+        chosen_config_per_layer = bits_configurations[config_index]
+        chosen_config_per_layer = self.get_ordered_config(chosen_config_per_layer, traces_order)
+        nncf_logger.info('Chosen HAWQ configuration with ratio={:.2f}, bitwidth per weightable layer={}'.format(
+            flops_bits_per_config[config_index], chosen_config_per_layer))
+        nncf_logger.debug('Order of the weightable layers in the HAWQ configuration={}'.format(traces_order))
 
-            self._model.rebuild_graph()
-            str_bw = [str(element) for element in self.get_bitwidth_per_scope()]
-            nncf_logger.info('\n'.join(['\n\"bitwidth_per_scope\": [', ',\n'.join(str_bw), ']']))
+        self.set_chosen_config(chosen_config_per_layer)
 
-            self._model.to(original_device)
+        if is_debug():
+            hawq_debugger = HAWQDebugger(bits_configurations, perturbations,
+                                         weight_observers, traces_per_layer, self._bits)
+            hawq_debugger.dump_metric_MB(configuration_metric)
+            hawq_debugger.dump_metric_flops(configuration_metric, flops_bits_per_config, config_index)
+            hawq_debugger.dump_avg_traces()
+            hawq_debugger.dump_density_of_quantization_noise()
+            hawq_debugger.dump_perturbations_ratio()
+            hawq_debugger.dump_bitwidth_graph(self._algo, self._model)
 
-            ordered_metric_per_layer = self.get_metric_per_layer(chosen_config_per_layer,
-                                                                 perturbations,
-                                                                 traces_per_layer)
+        self._model.rebuild_graph()
+        str_bw = [str(element) for element in self.get_bitwidth_per_scope()]
+        nncf_logger.info('\n'.join(['\n\"bitwidth_per_scope\": [', ',\n'.join(str_bw), ']']))
+
+        self._model.to(original_device)
+
+        ordered_metric_per_layer = self.get_metric_per_layer(chosen_config_per_layer, perturbations, traces_per_layer)
         return ordered_metric_per_layer
 
     def get_flops_bits_per_config(self, bits_configurations, traces_order):
@@ -228,16 +228,12 @@ class HAWQPrecisionInitializer(ManualPrecisionInitializer):
             ordered_config[order[i]] = bitwidth
         return ordered_config
 
-    class ParamsToRestore(NamedTuple):
-        originally_disabled_gradients: List[str]
-        skipped_gradients_to_enable: List[Tuple[nn.Module, str]]
-
     @staticmethod
     def disable_all_gradients_except_weights_of_quantized_modules(
             quantizers_switcher: QuantizersSwitcher,
             quantized_weight_modules_registry: Dict[str, torch.nn.Module],
             model: nn.Module,
-            scopes_of_skipped_weight_quantizers: List['Scope'] = None) -> ParamsToRestore: # pylint: disable=undefined-variable
+            scopes_of_skipped_weight_quantizers: List[str] = None) -> List[str]:
         """
         Disables gradients of all parameters, except for layers that have quantizers for weights, which wasn't skipped
         because of single precision constraints.
@@ -248,8 +244,7 @@ class HAWQPrecisionInitializer(ManualPrecisionInitializer):
         constraint and which weights should be skipped from bitwidth initialization
         :return: list of names of the parameters that were originally disabled
         """
-        originally_disabled_gradients = []
-        skipped_gradients_to_enable = []
+        disabled_gradients = []
 
         # Some quantizers can be disabled in a staged scenario on creation of staged scheduler
         # Need to save originally disabled quantizers for restoring their state after initialization
@@ -258,40 +253,36 @@ class HAWQPrecisionInitializer(ManualPrecisionInitializer):
         # remember gradients of quantized modules that were enabled
         gradients_to_enable = []
         for scope, quantized_module in quantized_weight_modules_registry.items():
-            is_skipped = False
-            for skipped_weight_quantizer_scope in scopes_of_skipped_weight_quantizers:
-                if skipped_weight_quantizer_scope in Scope.from_str(scope):
-                    is_skipped = True
-                    break
+            is_skipped = bool(scopes_of_skipped_weight_quantizers) and (scope in scopes_of_skipped_weight_quantizers)
             for param_name, param in quantized_module.named_parameters():
                 if param.requires_grad:
                     # disable gradients for skipped module for optimization of Hessian Trace search
                     if is_skipped:
-                        skipped_gradients_to_enable.append((quantized_module, param_name))
+                        disabled_gradients.append(param_name)
                         param.requires_grad = False
                     else:
-                        gradients_to_enable.append((quantized_module, param_name))
+                        gradients_to_enable.append(param_name)
 
         # disable all gradients, except already disabled
         for param_name, param in model.named_parameters():
             if not param.requires_grad:
-                originally_disabled_gradients.append(param_name)
+                disabled_gradients.append(param_name)
             else:
                 param.requires_grad = False
 
         # enable gradients of quantized modules that were disabled
         for quantized_module in quantized_weight_modules_registry.values():
             for param_name, param in quantized_module.named_parameters():
-                if (quantized_module, param_name) in gradients_to_enable and not 'bias' in param_name:
+                if param_name in gradients_to_enable and not 'bias' in param_name:
                     param.requires_grad = True
-        return HAWQPrecisionInitializer.ParamsToRestore(originally_disabled_gradients, skipped_gradients_to_enable)
+        return disabled_gradients
 
     def _calc_traces(self, criterion: _Loss, iter_number: int, tolerance: float) -> TracesPerLayer:
         if self._traces_per_layer_path:
             return TracesPerLayer(torch.load(self._traces_per_layer_path).to(self._init_device))
 
         quantizers_switcher = QuantizersSwitcher(list(self._all_quantizers_per_scope.values()))
-        params_to_restore = self.disable_all_gradients_except_weights_of_quantized_modules(
+        disabled_gradients = self.disable_all_gradients_except_weights_of_quantized_modules(
             quantizers_switcher,
             self._algo.quantized_weight_modules_registry,
             self._model,
@@ -301,42 +292,30 @@ class HAWQPrecisionInitializer(ManualPrecisionInitializer):
                                                 self._num_data_points)
         avg_traces = trace_estimator.get_average_traces(max_iter=iter_number, tolerance=tolerance)
 
-        self.restore_disabled_gradients(quantizers_switcher, self._model, self._algo.quantized_weight_modules_registry,
-                                        params_to_restore)
+        self.restore_disabled_gradients(quantizers_switcher, self._model, disabled_gradients)
 
         return TracesPerLayer(avg_traces)
 
     @staticmethod
     def restore_disabled_gradients(quantizers_switcher: QuantizersSwitcher,
-                                   model: nn.Module,
-                                   quantized_weight_modules_registry: Dict[str, torch.nn.Module],
-                                   params_to_restore: ParamsToRestore):
+                                   model: nn.Module, disabled_gradients: List[str]):
         """
-        Restore requires_grad property of all parameters back, except for ones that were originally disabled
+        Enables gradients of all parameters back, except for ones that were originally disabled
         :param quantizers_switcher: object that is responsible for enabling and disabling quantizers
         :param model: model to access all parameters
-        :param quantized_weight_modules_registry: modules with quantized weights per scope
-        :param params_to_restore: storage names of the parameters that should restore reguires_grad property
+        :param disabled_gradients:  list of names of the parameters that were originally disabled
         """
-        for quantized_module in quantized_weight_modules_registry.values():
-            for param_name, param in quantized_module.named_parameters():
-                if (quantized_module, param_name) in params_to_restore.skipped_gradients_to_enable:
-                    param.requires_grad = True
-
         for param_name, param in model.named_parameters():
-            if param_name not in params_to_restore.originally_disabled_gradients:
+            if param_name not in disabled_gradients:
                 param.requires_grad = True
         quantizers_switcher.enable_quantizers()
 
     @staticmethod
     def get_configs_constrained_by_order(bits_: List[int], num_layers: int) -> List[List[int]]:
-        bit_configs = []
-        if num_layers == 0:
-            return bit_configs
-
         bits = sorted(bits_)
         m = len(bits)
         L = num_layers
+        bit_configs = []
         for j in range(1, m + 1):
             for combo_bits in itertools.combinations(bits, j):
                 for combo_partitions in itertools.combinations(list(range(1, L)), j - 1):
@@ -455,7 +434,7 @@ class WeightQuantizersHandler:
                 if len(constraints.get(quantizer_id)) != 1:
                     ordered_weight_quantization_list.append((quantizer_id, quantizer))
                 else:
-                    self._scopes_of_skipped_weight_quantizers.append(scope)
+                    self._scopes_of_skipped_weight_quantizers.append(str(scope))
                     self._skipped_weight_quantizers[quantizer_id] = quantizer
         self._ordered_weight_quantizations = OrderedDict(ordered_weight_quantization_list)
 
